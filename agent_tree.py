@@ -659,6 +659,63 @@ def cmd_log(args):
     print(f"Logged to '{args.id}'")
 
 
+def cmd_update(args):
+    """Update task metadata (title, objective, tags)."""
+    agents_dir = TreeStore.find_agents_dir(os.getcwd())
+    if agents_dir is None:
+        print("Error: No .claude-agents/ directory found. Run 'init' first.")
+        sys.exit(1)
+
+    if args.title is None and args.objective is None and args.tags is None:
+        print("Error: Provide at least one of --title, --objective, or --tags.")
+        sys.exit(1)
+
+    store = TreeStore(agents_dir)
+
+    with store.lock():
+        data = store.load()
+        agents = data["agents"]
+
+        if args.id not in agents:
+            print(f"Error: Agent '{args.id}' not found.")
+            sys.exit(1)
+
+        now = datetime.now(timezone.utc).isoformat()
+        agent_entry = agents[args.id]
+
+        if args.title is not None:
+            agent_entry["title"] = args.title
+        if args.tags is not None:
+            agent_entry["tags"] = list(args.tags)
+        agent_entry["updated"] = now
+
+        file_path = os.path.join(agents_dir, agent_entry["file"])
+        with open(file_path) as f:
+            text = f.read()
+        meta, body = parse_frontmatter(text)
+
+        if args.title is not None:
+            meta["title"] = args.title
+        if args.tags is not None:
+            meta["tags"] = list(args.tags)
+        meta["updated"] = now
+
+        if args.objective is not None:
+            body = re.sub(
+                r'(## Objective\n).*?(\n## )',
+                rf'\g<1>{args.objective}\n\2',
+                body, count=1, flags=re.DOTALL,
+            )
+
+        with open(file_path, "w") as f:
+            f.write(write_frontmatter(meta, body))
+
+        store.save(data)
+
+    updated_fields = [f for f in ["title", "objective", "tags"] if getattr(args, f) is not None]
+    print(f"Updated '{args.id}': {', '.join(updated_fields)}")
+
+
 def _not_implemented(args):
     """Stub handler for unimplemented subcommands."""
     print("Not implemented")
@@ -709,7 +766,7 @@ def build_parser():
     p_update.add_argument("--title", help="New title")
     p_update.add_argument("--objective", help="New objective")
     p_update.add_argument("--tags", nargs="*", help="New tags")
-    p_update.set_defaults(func=_not_implemented)
+    p_update.set_defaults(func=cmd_update)
 
     # log
     p_log = subparsers.add_parser("log", help="Add a log entry")
