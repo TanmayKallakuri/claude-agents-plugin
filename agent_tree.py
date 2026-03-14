@@ -813,6 +813,138 @@ def cmd_fail(args):
     print(f"Failed '{args.id}': {args.reason}")
 
 
+def cmd_delete(args):
+    """Delete an agent and optionally cascade to children."""
+    agents_dir = TreeStore.find_agents_dir(os.getcwd())
+    if agents_dir is None:
+        print("Error: No .claude-agents/ directory found. Run 'init' first.")
+        sys.exit(1)
+
+    store = TreeStore(agents_dir)
+
+    with store.lock():
+        data = store.load()
+        agents = data["agents"]
+
+        if args.id not in agents:
+            print(f"Error: Agent '{args.id}' not found.")
+            sys.exit(1)
+
+        agent_entry = agents[args.id]
+        children = agent_entry.get("children", [])
+
+        if children and not args.cascade:
+            print(f"Error: Agent '{args.id}' has children: {children}. Use --cascade to delete them too.")
+            sys.exit(1)
+
+        # BFS to collect all IDs to delete
+        to_delete = []
+        queue = [args.id]
+        while queue:
+            current = queue.pop(0)
+            to_delete.append(current)
+            if args.cascade:
+                current_children = agents.get(current, {}).get("children", [])
+                queue.extend(current_children)
+
+        # Delete MD files
+        for agent_id in to_delete:
+            entry = agents.get(agent_id)
+            if entry is None:
+                continue
+            file_path = os.path.join(agents_dir, entry["file"])
+            if os.path.exists(file_path):
+                os.unlink(file_path)
+            parent_dir = os.path.dirname(file_path)
+            if parent_dir != agents_dir and os.path.isdir(parent_dir):
+                try:
+                    os.rmdir(parent_dir)
+                except OSError:
+                    pass
+
+        # Remove from tree.json
+        for agent_id in to_delete:
+            del agents[agent_id]
+
+        # Update parent's children list
+        parent_id = agent_entry.get("parent", "root")
+        if parent_id == "root":
+            root_children = data.get("root_children", [])
+            data["root_children"] = [c for c in root_children if c != args.id]
+        else:
+            parent = agents.get(parent_id)
+            if parent:
+                parent["children"] = [c for c in parent.get("children", []) if c != args.id]
+
+        store.save(data)
+
+    deleted_count = len(to_delete)
+    if deleted_count == 1:
+        print(f"Deleted '{args.id}'")
+    else:
+        print(f"Deleted '{args.id}' and {deleted_count - 1} children")
+
+
+def cmd_context(args):
+    """Show full context for a task: parent chain, children, blockers, siblings."""
+    agents_dir = TreeStore.find_agents_dir(os.getcwd())
+    if agents_dir is None:
+        print("Error: No .claude-agents/ directory found. Run 'init' first.")
+        sys.exit(1)
+
+    store = TreeStore(agents_dir)
+    data = store.load()
+    agents = data["agents"]
+
+    if args.id not in agents:
+        print(f"Error: Agent '{args.id}' not found.")
+        sys.exit(1)
+
+    agent = agents[args.id]
+
+    # Build parent chain (root → ... → direct parent)
+    chain = []
+    current = agent.get("parent", "root")
+    while current != "root":
+        parent = agents.get(current)
+        if parent is None:
+            break
+        chain.append(f"{current} ({parent.get('status', '?')})")
+        current = parent.get("parent", "root")
+    chain.append(f"[objective] {data['objective']}")
+    chain.reverse()
+
+    print(f"=== Context for '{args.id}' ===\n")
+    print("Parent chain:")
+    for i, item in enumerate(chain):
+        print(f"  {'  ' * i}→ {item}")
+    print(f"  {'  ' * len(chain)}→ {args.id} ({agent.get('status', '?')}) — {agent.get('title', '')}")
+
+    children = agent.get("children", [])
+    if children:
+        print(f"\nChildren ({len(children)}):")
+        for cid in children:
+            child = agents.get(cid, {})
+            print(f"  • {cid} ({child.get('status', '?')}) — {child.get('title', '')}")
+
+    blocked_by = agent.get("blocked_by")
+    if blocked_by:
+        blocker = agents.get(blocked_by, {})
+        print(f"\nBlocked by: {blocked_by} ({blocker.get('status', '?')}) — {blocker.get('title', '')}")
+
+    parent_id = agent.get("parent", "root")
+    if parent_id == "root":
+        sibling_ids = data.get("root_children", [])
+    else:
+        sibling_ids = agents.get(parent_id, {}).get("children", [])
+    siblings = [s for s in sibling_ids if s != args.id]
+    if siblings:
+        print(f"\nSiblings ({len(siblings)}):")
+        for sid in siblings:
+            sib = agents.get(sid, {})
+            print(f"  • {sid} ({sib.get('status', '?')}) — {sib.get('title', '')}")
+
+
 def _not_implemented(args):
     """Stub handler for unimplemented subcommands."""
     print("Not implemented")
@@ -900,12 +1032,12 @@ def build_parser():
     p_delete.add_argument(
         "--cascade", action="store_true", help="Delete children too"
     )
-    p_delete.set_defaults(func=_not_implemented)
+    p_delete.set_defaults(func=cmd_delete)
 
     # context
     p_context = subparsers.add_parser("context", help="Show task context")
     p_context.add_argument("id", help="Task ID")
-    p_context.set_defaults(func=_not_implemented)
+    p_context.set_defaults(func=cmd_context)
 
     # run
     p_run = subparsers.add_parser("run", help="Run a task")
