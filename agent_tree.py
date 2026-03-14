@@ -716,6 +716,103 @@ def cmd_update(args):
     print(f"Updated '{args.id}': {', '.join(updated_fields)}")
 
 
+def cmd_complete(args):
+    """Mark a task as done with a completion summary."""
+    agents_dir = TreeStore.find_agents_dir(os.getcwd())
+    if agents_dir is None:
+        print("Error: No .claude-agents/ directory found. Run 'init' first.")
+        sys.exit(1)
+
+    store = TreeStore(agents_dir)
+
+    with store.lock():
+        data = store.load()
+        agents = data["agents"]
+
+        if args.id not in agents:
+            print(f"Error: Agent '{args.id}' not found.")
+            sys.exit(1)
+
+        now = datetime.now(timezone.utc).isoformat()
+        agent_entry = agents[args.id]
+
+        agent_entry["status"] = "done"
+        agent_entry["updated"] = now
+        agent_entry["blocked_by"] = None
+
+        file_path = os.path.join(agents_dir, agent_entry["file"])
+        with open(file_path) as f:
+            text = f.read()
+        meta, body = parse_frontmatter(text)
+        meta["status"] = "done"
+        meta["updated"] = now
+        meta["blocked_by"] = "null"
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        log_line = f"\n### {timestamp} — DONE\n{args.summary}\n"
+        body = body.rstrip("\n") + "\n" + log_line
+
+        with open(file_path, "w") as f:
+            f.write(write_frontmatter(meta, body))
+
+        store.save(data)
+
+    print(f"Completed '{args.id}'")
+
+    parent_id = agent_entry.get("parent", "root")
+    if parent_id != "root":
+        parent = agents.get(parent_id)
+        if parent:
+            sibling_ids = parent.get("children", [])
+            all_done = all(agents.get(s, {}).get("status") == "done" for s in sibling_ids)
+            if all_done:
+                print(f"Tip: All children of '{parent_id}' are done. Consider completing it too.")
+
+
+def cmd_fail(args):
+    """Mark a task as failed with a reason."""
+    agents_dir = TreeStore.find_agents_dir(os.getcwd())
+    if agents_dir is None:
+        print("Error: No .claude-agents/ directory found. Run 'init' first.")
+        sys.exit(1)
+
+    store = TreeStore(agents_dir)
+
+    with store.lock():
+        data = store.load()
+        agents = data["agents"]
+
+        if args.id not in agents:
+            print(f"Error: Agent '{args.id}' not found.")
+            sys.exit(1)
+
+        now = datetime.now(timezone.utc).isoformat()
+        agent_entry = agents[args.id]
+
+        agent_entry["status"] = "failed"
+        agent_entry["updated"] = now
+        agent_entry["blocked_by"] = None
+
+        file_path = os.path.join(agents_dir, agent_entry["file"])
+        with open(file_path) as f:
+            text = f.read()
+        meta, body = parse_frontmatter(text)
+        meta["status"] = "failed"
+        meta["updated"] = now
+        meta["blocked_by"] = "null"
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        log_line = f"\n### {timestamp} — FAILED\n{args.reason}\n"
+        body = body.rstrip("\n") + "\n" + log_line
+
+        with open(file_path, "w") as f:
+            f.write(write_frontmatter(meta, body))
+
+        store.save(data)
+
+    print(f"Failed '{args.id}': {args.reason}")
+
+
 def _not_implemented(args):
     """Stub handler for unimplemented subcommands."""
     print("Not implemented")
@@ -789,13 +886,13 @@ def build_parser():
     p_complete = subparsers.add_parser("complete", help="Mark task as complete")
     p_complete.add_argument("id", help="Task ID")
     p_complete.add_argument("--summary", required=True, help="Completion summary")
-    p_complete.set_defaults(func=_not_implemented)
+    p_complete.set_defaults(func=cmd_complete)
 
     # fail
     p_fail = subparsers.add_parser("fail", help="Mark task as failed")
     p_fail.add_argument("id", help="Task ID")
     p_fail.add_argument("--reason", required=True, help="Failure reason")
-    p_fail.set_defaults(func=_not_implemented)
+    p_fail.set_defaults(func=cmd_fail)
 
     # delete
     p_delete = subparsers.add_parser("delete", help="Delete a task")
