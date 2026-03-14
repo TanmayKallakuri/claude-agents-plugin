@@ -945,6 +945,113 @@ def cmd_context(args):
             print(f"  • {sid} ({sib.get('status', '?')}) — {sib.get('title', '')}")
 
 
+def cmd_validate(args):
+    """Validate tree integrity: missing files, orphans, broken references."""
+    agents_dir = TreeStore.find_agents_dir(os.getcwd())
+    if agents_dir is None:
+        print("Error: No .claude-agents/ directory found. Run 'init' first.")
+        sys.exit(1)
+
+    store = TreeStore(agents_dir)
+    data = store.load()
+    agents = data["agents"]
+    issues = []
+
+    for agent_id, agent in agents.items():
+        file_path = os.path.join(agents_dir, agent["file"])
+        if not os.path.exists(file_path):
+            issues.append(
+                f"MISSING FILE: '{agent_id}' references '{agent['file']}' but file not found"
+            )
+
+        parent = agent.get("parent", "root")
+        if parent != "root" and parent not in agents:
+            issues.append(
+                f"ORPHAN: '{agent_id}' references parent '{parent}' which doesn't exist"
+            )
+
+        for child_id in agent.get("children", []):
+            if child_id not in agents:
+                issues.append(
+                    f"MISSING CHILD: '{agent_id}' lists child '{child_id}' which doesn't exist"
+                )
+
+        blocked_by = agent.get("blocked_by")
+        if blocked_by and blocked_by not in agents:
+            issues.append(
+                f"MISSING BLOCKER: '{agent_id}' blocked by '{blocked_by}' which doesn't exist"
+            )
+
+    if issues:
+        print(f"Found {len(issues)} issue(s):\n")
+        for issue in issues:
+            print(f"  x {issue}")
+    else:
+        print("Tree is valid. No issues found.")
+
+
+def cmd_sync(args):
+    """Sync tree.json with MD files on disk. MD files are source of truth for status/title."""
+    agents_dir = TreeStore.find_agents_dir(os.getcwd())
+    if agents_dir is None:
+        print("Error: No .claude-agents/ directory found. Run 'init' first.")
+        sys.exit(1)
+
+    store = TreeStore(agents_dir)
+
+    with store.lock():
+        data = store.load()
+        agents = data["agents"]
+        removed = []
+        synced = []
+
+        to_remove = []
+        for agent_id, agent in agents.items():
+            file_path = os.path.join(agents_dir, agent["file"])
+            if not os.path.exists(file_path):
+                to_remove.append(agent_id)
+
+        for agent_id in to_remove:
+            parent_id = agents[agent_id].get("parent", "root")
+            if parent_id == "root":
+                root_children = data.get("root_children", [])
+                data["root_children"] = [c for c in root_children if c != agent_id]
+            else:
+                parent = agents.get(parent_id)
+                if parent:
+                    parent["children"] = [
+                        c for c in parent.get("children", []) if c != agent_id
+                    ]
+            del agents[agent_id]
+            removed.append(agent_id)
+
+        for agent_id, agent in agents.items():
+            file_path = os.path.join(agents_dir, agent["file"])
+            with open(file_path) as f:
+                text = f.read()
+            meta, _ = parse_frontmatter(text)
+
+            changes = []
+            for field in ("status", "title"):
+                if field in meta and meta[field] != agent.get(field):
+                    changes.append(f"{field}: {agent.get(field)} -> {meta[field]}")
+                    agent[field] = meta[field]
+
+            if changes:
+                synced.append(f"{agent_id}: {', '.join(changes)}")
+
+        store.save(data)
+
+    if removed:
+        print(f"Removed {len(removed)} missing agent(s): {', '.join(removed)}")
+    if synced:
+        print(f"Synced {len(synced)} agent(s):")
+        for s in synced:
+            print(f"  - {s}")
+    if not removed and not synced:
+        print("Already in sync.")
+
+
 def _not_implemented(args):
     """Stub handler for unimplemented subcommands."""
     print("Not implemented")
@@ -1045,13 +1152,15 @@ def build_parser():
     p_run.set_defaults(func=_not_implemented)
 
     # validate
-    p_validate = subparsers.add_parser("validate", help="Validate a task")
-    p_validate.add_argument("id", help="Task ID")
-    p_validate.set_defaults(func=_not_implemented)
+    p_validate = subparsers.add_parser("validate", help="Validate tree integrity")
+    p_validate.add_argument(
+        "--id", default=None, help="Validate specific agent (default: all)"
+    )
+    p_validate.set_defaults(func=cmd_validate)
 
     # sync
     p_sync = subparsers.add_parser("sync", help="Sync tree state")
-    p_sync.set_defaults(func=_not_implemented)
+    p_sync.set_defaults(func=cmd_sync)
 
     return parser
 
