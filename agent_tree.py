@@ -1052,11 +1052,6 @@ def cmd_sync(args):
         print("Already in sync.")
 
 
-def _not_implemented(args):
-    """Stub handler for unimplemented subcommands."""
-    print("Not implemented")
-    sys.exit(1)
-
 
 def build_parser():
     """Build and return the argument parser with all subcommands."""
@@ -1145,11 +1140,6 @@ def build_parser():
     p_context = subparsers.add_parser("context", help="Show task context")
     p_context.add_argument("id", help="Task ID")
     p_context.set_defaults(func=cmd_context)
-
-    # run
-    p_run = subparsers.add_parser("run", help="Run a task")
-    p_run.add_argument("id", help="Task ID")
-    p_run.set_defaults(func=_not_implemented)
 
     # validate
     p_validate = subparsers.add_parser("validate", help="Validate tree integrity")
