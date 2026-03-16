@@ -15,6 +15,37 @@ import argparse
 
 
 # ---------------------------------------------------------------------------
+# ID Validation
+# ---------------------------------------------------------------------------
+
+_RESERVED_IDS = frozenset({"objective", "tree", "root"})
+_VALID_ID_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*$')
+
+
+def _validate_agent_id(agent_id):
+    """Validate an agent ID. Raises SystemExit on invalid IDs.
+
+    Rules:
+    - Must match [a-zA-Z0-9][a-zA-Z0-9._-]* (start with alphanumeric)
+    - Cannot be a reserved name (objective, tree, root)
+    - Max 100 characters
+    """
+    if not agent_id:
+        print("Error: Agent ID cannot be empty.")
+        sys.exit(1)
+    if len(agent_id) > 100:
+        print(f"Error: Agent ID too long ({len(agent_id)} chars, max 100).")
+        sys.exit(1)
+    if not _VALID_ID_RE.match(agent_id):
+        print(f"Error: Invalid agent ID '{agent_id}'. "
+              "Must start with alphanumeric and contain only [a-zA-Z0-9._-].")
+        sys.exit(1)
+    if agent_id in _RESERVED_IDS:
+        print(f"Error: '{agent_id}' is a reserved name.")
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
 # YAML Frontmatter Parser
 # ---------------------------------------------------------------------------
 
@@ -31,10 +62,16 @@ def _format_yaml_value(value):
     if isinstance(value, list):
         if not value:
             return "[]"
-        return "[" + ", ".join(str(item) for item in value) + "]"
-    s = str(value)
+        items = []
+        for item in value:
+            s = str(item).replace("\n", " ")
+            if "," in s or any(c in s for c in _SPECIAL_CHARS):
+                s = '"' + s.replace('"', '\\"') + '"'
+            items.append(s)
+        return "[" + ", ".join(items) + "]"
+    s = str(value).replace("\n", " ")
     if any(c in s for c in _SPECIAL_CHARS):
-        return '"' + s + '"'
+        return '"' + s.replace('"', '\\"') + '"'
     return s
 
 
@@ -46,14 +83,39 @@ def _parse_yaml_value(raw):
         inner = stripped[1:-1].strip()
         if not inner:
             return []
-        return [item.strip() for item in inner.split(",")]
+        return _parse_yaml_list(inner)
     # Quoted string
     if (
         (stripped.startswith('"') and stripped.endswith('"'))
         or (stripped.startswith("'") and stripped.endswith("'"))
     ):
-        return stripped[1:-1]
+        return stripped[1:-1].replace('\\"', '"')
     return stripped
+
+
+def _parse_yaml_list(inner):
+    """Parse a YAML-style list interior, respecting quoted items."""
+    items = []
+    current = []
+    in_quotes = False
+    quote_char = None
+    for ch in inner:
+        if in_quotes:
+            if ch == quote_char:
+                in_quotes = False
+            else:
+                current.append(ch)
+        elif ch == '"' or ch == "'":
+            in_quotes = True
+            quote_char = ch
+        elif ch == ',':
+            items.append("".join(current).strip())
+            current = []
+        else:
+            current.append(ch)
+    if current:
+        items.append("".join(current).strip())
+    return items
 
 
 def parse_frontmatter(text):
@@ -118,31 +180,46 @@ class FileLock:
         self._path = path
 
     def acquire(self):
-        """Acquire the lock. Raises RuntimeError if held by a live process."""
-        if os.path.exists(self._path):
-            try:
-                with open(self._path) as f:
-                    existing_pid = int(f.read().strip())
-            except (ValueError, OSError):
-                # Corrupt lock file, break it
-                os.unlink(self._path)
-            else:
-                try:
-                    os.kill(existing_pid, 0)
-                except ProcessLookupError:
-                    # Stale lock - process is dead
-                    os.unlink(self._path)
-                except PermissionError:
-                    # Process exists but we can't signal it - treat as alive
-                    raise RuntimeError(
-                        f"Lock held by PID {existing_pid} (permission denied)"
-                    )
-                else:
-                    # Process is alive
-                    raise RuntimeError(f"Lock held by PID {existing_pid}")
+        """Acquire the lock. Raises RuntimeError if held by a live process.
 
-        with open(self._path, "w") as f:
-            f.write(str(os.getpid()))
+        Uses O_CREAT|O_EXCL for atomic creation to prevent TOCTOU races.
+        """
+        # First try atomic creation
+        try:
+            fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+            return
+        except FileExistsError:
+            pass  # Lock file exists, check if stale
+
+        # Lock file exists — check if holder is alive
+        try:
+            with open(self._path, encoding="utf-8") as f:
+                existing_pid = int(f.read().strip())
+        except (ValueError, OSError):
+            # Corrupt lock file, break it and retry
+            try:
+                os.unlink(self._path)
+            except OSError:
+                pass
+            return self.acquire()
+
+        try:
+            os.kill(existing_pid, 0)
+        except ProcessLookupError:
+            # Stale lock — process is dead, break it and retry
+            try:
+                os.unlink(self._path)
+            except OSError:
+                pass
+            return self.acquire()
+        except PermissionError:
+            raise RuntimeError(
+                f"Lock held by PID {existing_pid} (permission denied)"
+            )
+        else:
+            raise RuntimeError(f"Lock held by PID {existing_pid}")
 
     def release(self):
         """Release the lock by removing the lock file."""
@@ -183,19 +260,35 @@ class TreeStore:
         self.save(data)
 
     def load(self):
-        """Load and return tree.json data, with version checking."""
-        with open(self.tree_path) as f:
-            data = json.load(f)
+        """Load and return tree.json data, with version and structure checking."""
+        try:
+            with open(self.tree_path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"Error: Failed to load tree.json: {e}")
+            sys.exit(1)
         self._check_version(data)
+        # Validate required structure
+        if "agents" not in data:
+            data["agents"] = {}
+        if "objective" not in data:
+            data["objective"] = "(unknown)"
         return data
 
     def save(self, data):
-        """Save data to tree.json, converting paths to POSIX separators."""
+        """Save data to tree.json atomically, normalizing file paths to POSIX."""
+        # Normalize only file path values, not all string values
+        for agent in data.get("agents", {}).values():
+            if "file" in agent:
+                agent["file"] = agent["file"].replace("\\", "/")
+
         raw = json.dumps(data, indent=2)
-        # Replace backslash paths with forward slashes
-        raw = raw.replace("\\\\", "/")
-        with open(self.tree_path, "w") as f:
+
+        # Atomic write: write to temp file, then rename
+        tmp_path = self.tree_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(raw)
+        os.replace(tmp_path, self.tree_path)
 
     def lock(self):
         """Return a FileLock instance for the tree."""
@@ -236,10 +329,17 @@ class TreeStore:
 # ---------------------------------------------------------------------------
 
 def _get_depth(data, parent_id):
-    """Walk parent chain to calculate depth. Root = 0."""
+    """Walk parent chain to calculate depth. Root = 0.
+
+    Includes cycle detection to prevent infinite loops on corrupted data.
+    """
     depth = 0
     current = parent_id
+    visited = set()
     while current != "root":
+        if current in visited:
+            break  # cycle detected
+        visited.add(current)
         agent = data["agents"].get(current)
         if agent is None:
             break
@@ -267,11 +367,11 @@ def _move_to_subfolder(agents_dir, agent_id, current_file, data):
 def _update_md_children(agents_dir, agent_entry):
     """Update the children field in an agent's MD frontmatter."""
     file_path = os.path.join(agents_dir, agent_entry["file"])
-    with open(file_path) as f:
+    with open(file_path, encoding="utf-8") as f:
         text = f.read()
     meta, body = parse_frontmatter(text)
     meta["children"] = list(agent_entry.get("children", []))
-    with open(file_path, "w") as f:
+    with open(file_path, "w", encoding="utf-8") as f:
         f.write(write_frontmatter(meta, body))
 
 
@@ -300,7 +400,7 @@ def _get_last_log_entry(agents_dir, agent_entry):
     """Extract the last log entry (### heading + content) from an agent's MD file."""
     file_path = os.path.join(agents_dir, agent_entry["file"])
     try:
-        with open(file_path) as f:
+        with open(file_path, encoding="utf-8") as f:
             text = f.read()
     except OSError:
         return None
@@ -375,7 +475,7 @@ def cmd_init(args):
 
     # Write objective.md
     objective_path = os.path.join(agents_dir, "objective.md")
-    with open(objective_path, "w") as f:
+    with open(objective_path, "w", encoding="utf-8") as f:
         f.write(f"# Objective\n\n{args.objective}\n")
 
     # Write tree.json
@@ -387,7 +487,7 @@ def cmd_init(args):
     # Check .gitignore for tip
     gitignore_path = os.path.join(os.getcwd(), ".gitignore")
     if os.path.exists(gitignore_path):
-        with open(gitignore_path) as f:
+        with open(gitignore_path, encoding="utf-8") as f:
             content = f.read()
         if ".claude-agents/" not in content and ".claude-agents" not in content:
             print("Tip: Add .claude-agents/ to your .gitignore")
@@ -395,6 +495,8 @@ def cmd_init(args):
 
 def cmd_spawn(args):
     """Spawn a new agent task."""
+    _validate_agent_id(args.id)
+
     agents_dir = TreeStore.find_agents_dir(os.getcwd())
     if agents_dir is None:
         print("Error: No .claude-agents/ directory found. Run 'init' first.")
@@ -464,7 +566,7 @@ def cmd_spawn(args):
 
         file_path = os.path.join(agents_dir, file_rel)
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        with open(file_path, "w") as f:
+        with open(file_path, "w", encoding="utf-8") as f:
             f.write(md_content)
 
         # Register in tree.json
@@ -545,7 +647,7 @@ def cmd_status(args):
 
         # Update MD frontmatter
         file_path = os.path.join(agents_dir, agent_entry["file"])
-        with open(file_path) as f:
+        with open(file_path, encoding="utf-8") as f:
             text = f.read()
         meta, body = parse_frontmatter(text)
         meta["status"] = args.new_status
@@ -556,7 +658,7 @@ def cmd_status(args):
         else:
             meta["blocked_by"] = "null"
 
-        with open(file_path, "w") as f:
+        with open(file_path, "w", encoding="utf-8") as f:
             f.write(write_frontmatter(meta, body))
 
         store.save(data)
@@ -593,7 +695,7 @@ def cmd_read(args):
         sys.exit(1)
 
     file_path = os.path.join(agents_dir, data["agents"][args.id]["file"])
-    with open(file_path) as f:
+    with open(file_path, encoding="utf-8") as f:
         print(f.read())
 
 
@@ -640,7 +742,7 @@ def cmd_log(args):
         agent_entry = agents[args.id]
 
         file_path = os.path.join(agents_dir, agent_entry["file"])
-        with open(file_path) as f:
+        with open(file_path, encoding="utf-8") as f:
             text = f.read()
 
         meta, body = parse_frontmatter(text)
@@ -650,7 +752,7 @@ def cmd_log(args):
         log_line = f"\n### {timestamp}\n{args.message}\n"
         body = body.rstrip("\n") + "\n" + log_line
 
-        with open(file_path, "w") as f:
+        with open(file_path, "w", encoding="utf-8") as f:
             f.write(write_frontmatter(meta, body))
 
         agent_entry["updated"] = now
@@ -690,7 +792,7 @@ def cmd_update(args):
         agent_entry["updated"] = now
 
         file_path = os.path.join(agents_dir, agent_entry["file"])
-        with open(file_path) as f:
+        with open(file_path, encoding="utf-8") as f:
             text = f.read()
         meta, body = parse_frontmatter(text)
 
@@ -701,13 +803,21 @@ def cmd_update(args):
         meta["updated"] = now
 
         if args.objective is not None:
-            body = re.sub(
-                r'(## Objective\n).*?(\n## )',
-                rf'\g<1>{args.objective}\n\2',
+            # Use a lambda replacement to avoid regex backreference
+            # injection from user-supplied objective text
+            safe_objective = args.objective
+            new_body, count = re.subn(
+                r'(## Objective\n)(.*?)(\n## )',
+                lambda m: m.group(1) + safe_objective + "\n" + m.group(3),
                 body, count=1, flags=re.DOTALL,
             )
+            if count == 0:
+                print(f"Warning: '## Objective' section not found in '{args.id}'. "
+                      "Objective not updated in MD file.")
+            else:
+                body = new_body
 
-        with open(file_path, "w") as f:
+        with open(file_path, "w", encoding="utf-8") as f:
             f.write(write_frontmatter(meta, body))
 
         store.save(data)
@@ -741,7 +851,7 @@ def cmd_complete(args):
         agent_entry["blocked_by"] = None
 
         file_path = os.path.join(agents_dir, agent_entry["file"])
-        with open(file_path) as f:
+        with open(file_path, encoding="utf-8") as f:
             text = f.read()
         meta, body = parse_frontmatter(text)
         meta["status"] = "done"
@@ -752,7 +862,7 @@ def cmd_complete(args):
         log_line = f"\n### {timestamp} — DONE\n{args.summary}\n"
         body = body.rstrip("\n") + "\n" + log_line
 
-        with open(file_path, "w") as f:
+        with open(file_path, "w", encoding="utf-8") as f:
             f.write(write_frontmatter(meta, body))
 
         store.save(data)
@@ -794,7 +904,7 @@ def cmd_fail(args):
         agent_entry["blocked_by"] = None
 
         file_path = os.path.join(agents_dir, agent_entry["file"])
-        with open(file_path) as f:
+        with open(file_path, encoding="utf-8") as f:
             text = f.read()
         meta, body = parse_frontmatter(text)
         meta["status"] = "failed"
@@ -805,7 +915,7 @@ def cmd_fail(args):
         log_line = f"\n### {timestamp} — FAILED\n{args.reason}\n"
         body = body.rstrip("\n") + "\n" + log_line
 
-        with open(file_path, "w") as f:
+        with open(file_path, "w", encoding="utf-8") as f:
             f.write(write_frontmatter(meta, body))
 
         store.save(data)
@@ -863,8 +973,23 @@ def cmd_delete(args):
                     pass
 
         # Remove from tree.json
+        deleted_set = set(to_delete)
         for agent_id in to_delete:
             del agents[agent_id]
+
+        # Clear dangling blocked_by references
+        for agent_id, agent in agents.items():
+            if agent.get("blocked_by") in deleted_set:
+                agent["blocked_by"] = None
+                # Also update the MD frontmatter
+                file_path = os.path.join(agents_dir, agent["file"])
+                if os.path.exists(file_path):
+                    with open(file_path, encoding="utf-8") as f:
+                        text = f.read()
+                    meta, body = parse_frontmatter(text)
+                    meta["blocked_by"] = "null"
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(write_frontmatter(meta, body))
 
         # Update parent's children list
         parent_id = agent_entry.get("parent", "root")
@@ -875,6 +1000,8 @@ def cmd_delete(args):
             parent = agents.get(parent_id)
             if parent:
                 parent["children"] = [c for c in parent.get("children", []) if c != args.id]
+                # Sync parent's MD frontmatter children list
+                _update_md_children(agents_dir, parent)
 
         store.save(data)
 
@@ -904,8 +1031,13 @@ def cmd_context(args):
 
     # Build parent chain (root → ... → direct parent)
     chain = []
+    visited = set()
     current = agent.get("parent", "root")
     while current != "root":
+        if current in visited:
+            chain.append(f"(cycle detected at {current})")
+            break
+        visited.add(current)
         parent = agents.get(current)
         if parent is None:
             break
@@ -1027,7 +1159,7 @@ def cmd_sync(args):
 
         for agent_id, agent in agents.items():
             file_path = os.path.join(agents_dir, agent["file"])
-            with open(file_path) as f:
+            with open(file_path, encoding="utf-8") as f:
                 text = f.read()
             meta, _ = parse_frontmatter(text)
 
