@@ -25,28 +25,33 @@ This plugin solves all of that with a single-file CLI and a skill that teaches C
 
 ## Installation
 
-### Option 1: Clone to your Claude Code skills directory
+### 1. Clone the plugin
 
 ```bash
 git clone https://github.com/TanmayKallakuri/claude-agents-plugin.git ~/.claude/skills/claude-agents-plugin
 ```
 
-That's it. Claude Code automatically picks up skills from `~/.claude/skills/`.
+### 2. Add the CLI alias
 
-### Option 2: Clone anywhere and symlink
-
-```bash
-git clone https://github.com/TanmayKallakuri/claude-agents-plugin.git ~/projects/claude-agents-plugin
-ln -s ~/projects/claude-agents-plugin ~/.claude/skills/claude-agents-plugin
-```
-
-### Verify installation
+Add this to your `~/.bashrc` or `~/.zshrc`:
 
 ```bash
-python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py --help
+alias agent-tree="agent-tree"
 ```
 
-You should see the CLI help with all 13 commands.
+Then reload your shell:
+
+```bash
+source ~/.zshrc  # or source ~/.bashrc
+```
+
+### 3. Verify
+
+```bash
+agent-tree --help
+```
+
+You should see the CLI help with all 13 commands. Claude Code automatically picks up the skill from `~/.claude/skills/`.
 
 ## Usage
 
@@ -81,30 +86,30 @@ Or ask for status at any time:
 cd ~/my-project
 
 # Initialize an agent tree
-python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py init "Build user auth system"
+agent-tree init "Build user auth system"
 
 # Spawn agents
-python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py spawn auth-api \
+agent-tree spawn auth-api \
   --parent root \
   --title "Auth API" \
   --objective "Build login and signup REST endpoints" \
   --tags backend api
 
-python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py spawn auth-ui \
+agent-tree spawn auth-ui \
   --parent root \
   --title "Auth UI" \
   --objective "Build login and signup React components" \
   --tags frontend ui
 
 # Set dependencies
-python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py status auth-ui blocked --blocked-by auth-api
+agent-tree status auth-ui blocked --blocked-by auth-api
 
 # Log progress
-python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py log auth-api "Set up Express routes and JWT middleware"
-python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py status auth-api working
+agent-tree log auth-api "Set up Express routes and JWT middleware"
+agent-tree status auth-api working
 
 # View the tree
-python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py tree --verbose
+agent-tree tree --verbose
 ```
 
 **Output:**
@@ -117,13 +122,13 @@ Build user auth system [objective]
 
 ```bash
 # Complete work
-python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py complete auth-api --summary "All endpoints working with JWT refresh tokens"
+agent-tree complete auth-api --summary "All endpoints working with JWT refresh tokens"
 
 # Validate tree integrity
-python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py validate
+agent-tree validate
 
 # Sync tree.json with markdown files
-python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py sync
+agent-tree sync
 ```
 
 ## CLI Reference
