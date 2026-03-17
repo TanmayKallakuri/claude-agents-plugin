@@ -53,13 +53,13 @@ Wait for the user to confirm or correct before proceeding.
 If no `.claude-agents/` directory exists in the project root:
 
 ```bash
-python3 agent_tree.py init "<objective from user's request>"
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py init "<objective from user's request>"
 ```
 
 If `.claude-agents/` already exists, check the current tree state:
 
 ```bash
-python3 agent_tree.py tree --verbose
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py tree --verbose
 ```
 
 Decide whether to continue the existing tree or init fresh (ask the user if unclear).
@@ -71,7 +71,7 @@ Decide whether to continue the existing tree or init fresh (ask the user if uncl
 3. **Spawn agents** — one per workstream:
 
 ```bash
-python3 agent_tree.py spawn <id> \
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py spawn <id> \
   --parent root \
   --title "<clear title>" \
   --objective "<what this agent must accomplish>" \
@@ -81,7 +81,7 @@ python3 agent_tree.py spawn <id> \
 4. **Set dependencies** — if agent B needs agent A's output:
 
 ```bash
-python3 agent_tree.py status <agent-b> blocked --blocked-by <agent-a>
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py status <agent-b> blocked --blocked-by <agent-a>
 ```
 
 ## Phase 3: Dispatch Sub-Agents with Full Context
@@ -118,14 +118,14 @@ Objective: <objective>
 <list specific file paths this agent needs to understand before making changes>
 
 ## Track Progress
-python3 agent_tree.py status <id> working
-python3 agent_tree.py log <id> "<what you did>"
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py status <id> working
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py log <id> "<what you did>"
 
 ## When Finished
-python3 agent_tree.py complete <id> --summary "<what was accomplished>"
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py complete <id> --summary "<what was accomplished>"
 
 ## If Stuck
-python3 agent_tree.py fail <id> --reason "<what went wrong>"
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py fail <id> --reason "<what went wrong>"
 ```
 
 ## Naming Conventions
@@ -139,13 +139,13 @@ python3 agent_tree.py fail <id> --reason "<what went wrong>"
 Show the tree when the user asks for status:
 
 ```bash
-python3 agent_tree.py tree --verbose
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py tree --verbose
 ```
 
 Show context for a specific agent:
 
 ```bash
-python3 agent_tree.py context <id>
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py context <id>
 ```
 
 ## When Agents Complete
@@ -172,4 +172,4 @@ When spawning sub-agents, decide between:
 - ALWAYS include tags for filtering (e.g., backend, frontend, testing)
 - ALWAYS list which existing files each agent must read before editing
 - Log progress frequently — the MD files are living documentation
-- Validate the tree periodically: `python3 agent_tree.py validate`
+- Validate the tree periodically: `python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py validate`

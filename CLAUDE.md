@@ -17,22 +17,22 @@ When you describe a complex task, this plugin:
 
 ```bash
 # Initialize in a project
-python3 agent_tree.py init "Build user auth system"
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py init "Build user auth system"
 
 # Spawn agents
-python3 agent_tree.py spawn auth-api \
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py spawn auth-api \
   --parent root --title "Auth API" \
   --objective "Build login/signup endpoints" --tags backend
 
 # Track progress
-python3 agent_tree.py status auth-api working
-python3 agent_tree.py log auth-api "Implemented /login endpoint"
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py status auth-api working
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py log auth-api "Implemented /login endpoint"
 
 # View tree
-python3 agent_tree.py tree --verbose
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py tree --verbose
 
 # Complete
-python3 agent_tree.py complete auth-api --summary "All endpoints working"
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py complete auth-api --summary "All endpoints working"
 ```
 
 ## CLI Commands

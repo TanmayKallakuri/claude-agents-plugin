@@ -20,10 +20,10 @@ You MUST understand the project and conversation context BEFORE decomposing anyt
 
 ```bash
 # New orchestration
-python3 agent_tree.py init "<objective>"
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py init "<objective>"
 
 # Existing orchestration
-python3 agent_tree.py tree --verbose
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py tree --verbose
 ```
 
 ### Step 3: Decompose and Spawn
@@ -35,7 +35,7 @@ Spawn agents with clear objectives. Each sub-agent gets:
 - List of existing files they MUST read before editing
 
 ```bash
-python3 agent_tree.py spawn <id> \
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py spawn <id> \
   --parent root \
   --title "<title>" \
   --objective "<objective>" \
@@ -45,9 +45,9 @@ python3 agent_tree.py spawn <id> \
 ### Step 4: Monitor and Complete
 
 ```bash
-python3 agent_tree.py tree --verbose
-python3 agent_tree.py context <id>
-python3 agent_tree.py validate
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py tree --verbose
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py context <id>
+python3 ~/.claude/skills/claude-agents-plugin/agent_tree.py validate
 ```
 
 ## Rules
