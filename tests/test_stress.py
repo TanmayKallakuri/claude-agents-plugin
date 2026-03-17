@@ -934,7 +934,7 @@ class TestFileSystemEdgeCases(StressTestBase):
         with open(tree_path, "w") as f:
             json.dump(data, f)
         store = TreeStore(self._agents_dir)
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(SystemExit):
             store.load()
 
     def test_stale_lock_file_cleaned_up(self):

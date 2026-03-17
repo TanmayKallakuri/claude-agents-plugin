@@ -1,0 +1,19 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-agents-plugin",
+  "description": "Agent orchestration for Claude Code. Decomposes complex tasks into tracked, parallel sub-agents with markdown file trees and dependency management.",
+  "owner": {
+    "name": "TanmayKallakuri"
+  },
+  "plugins": [
+    {
+      "name": "claude-agents-plugin",
+      "source": "./",
+      "description": "Break complex dev tasks into tracked sub-agents with hierarchical MD file trees, dependency blocking, and progress logging.",
+      "version": "1.0.0",
+      "category": "workflow",
+      "tags": ["agents", "orchestration", "task-management", "subagents", "workflow"],
+      "strict": false
+    }
+  ]
+}

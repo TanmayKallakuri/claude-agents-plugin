@@ -2,7 +2,7 @@
 """Claude Agents Plugin - Core Infrastructure.
 
 Single-file CLI with YAML frontmatter parser, PID-based file lock, and TreeStore.
-Zero external dependencies - stdlib only (Python 3.13).
+Zero external dependencies - stdlib only (Python 3.9+).
 """
 
 import os
@@ -12,6 +12,7 @@ import re
 import shutil
 from datetime import datetime, timezone
 import argparse
+from collections import deque
 
 
 # ---------------------------------------------------------------------------
@@ -94,14 +95,27 @@ def _parse_yaml_value(raw):
 
 
 def _parse_yaml_list(inner):
-    """Parse a YAML-style list interior, respecting quoted items."""
+    """Parse a YAML-style list interior, respecting quoted items and escapes."""
     items = []
     current = []
     in_quotes = False
     quote_char = None
+    escaped = False
     for ch in inner:
-        if in_quotes:
-            if ch == quote_char:
+        if escaped:
+            # Handle escape sequences inside quotes
+            if ch == '"':
+                current.append('"')
+            elif ch == '\\':
+                current.append('\\')
+            else:
+                current.append('\\')
+                current.append(ch)
+            escaped = False
+        elif in_quotes:
+            if ch == '\\':
+                escaped = True
+            elif ch == quote_char:
                 in_quotes = False
             else:
                 current.append(ch)
@@ -179,11 +193,17 @@ class FileLock:
     def __init__(self, path):
         self._path = path
 
-    def acquire(self):
+    def acquire(self, _retries=3):
         """Acquire the lock. Raises RuntimeError if held by a live process.
 
         Uses O_CREAT|O_EXCL for atomic creation to prevent TOCTOU races.
+        Retries up to 3 times for stale/corrupt locks before giving up.
         """
+        if _retries <= 0:
+            raise RuntimeError(
+                f"Could not acquire lock at {self._path} after multiple attempts"
+            )
+
         # First try atomic creation
         try:
             fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -203,7 +223,7 @@ class FileLock:
                 os.unlink(self._path)
             except OSError:
                 pass
-            return self.acquire()
+            return self.acquire(_retries - 1)
 
         try:
             os.kill(existing_pid, 0)
@@ -213,7 +233,7 @@ class FileLock:
                 os.unlink(self._path)
             except OSError:
                 pass
-            return self.acquire()
+            return self.acquire(_retries - 1)
         except PermissionError:
             raise RuntimeError(
                 f"Lock held by PID {existing_pid} (permission denied)"
@@ -277,12 +297,13 @@ class TreeStore:
 
     def save(self, data):
         """Save data to tree.json atomically, normalizing file paths to POSIX."""
-        # Normalize only file path values, not all string values
-        for agent in data.get("agents", {}).values():
+        # Normalize file paths in a copy to avoid mutating caller's data
+        save_data = json.loads(json.dumps(data))
+        for agent in save_data.get("agents", {}).values():
             if "file" in agent:
                 agent["file"] = agent["file"].replace("\\", "/")
 
-        raw = json.dumps(data, indent=2)
+        raw = json.dumps(save_data, indent=2)
 
         # Atomic write: write to temp file, then rename
         tmp_path = self.tree_path + ".tmp"
@@ -298,10 +319,11 @@ class TreeStore:
         """Check data version, auto-migrate older or error on newer."""
         version = data.get("version", 0)
         if version > self.CURRENT_VERSION:
-            raise RuntimeError(
-                f"Tree version {version} is newer than supported "
+            print(
+                f"Error: Tree version {version} is newer than supported "
                 f"version {self.CURRENT_VERSION}. Please upgrade."
             )
+            sys.exit(1)
         if version < self.CURRENT_VERSION:
             print(
                 f"Notice: Migrating tree from version {version} "
@@ -524,7 +546,7 @@ def cmd_spawn(args):
         if agent_count >= max_agents and not args.force:
             print(f"Error: Max agents ({max_agents}) reached. Use --force to override.")
             sys.exit(1)
-        if agent_count >= 30 and agent_count < max_agents:
+        if agent_count == 30:
             print(f"Warning: {agent_count} agents spawned (max: {max_agents})")
 
         # Enforce max depth
@@ -711,8 +733,8 @@ def cmd_tree(args):
 
     print(f"{data['objective']} [objective]")
 
-    # Get root-level agents
-    root_children = data.get("root_children", [])
+    # Get root-level agents (copy to avoid mutating loaded data)
+    root_children = list(data.get("root_children", []))
     # Also find agents with parent "root" not in root_children
     for agent_id, agent in data["agents"].items():
         if agent.get("parent") == "root" and agent_id not in root_children:
@@ -738,7 +760,8 @@ def cmd_log(args):
             print(f"Error: Agent '{args.id}' not found.")
             sys.exit(1)
 
-        now = datetime.now(timezone.utc).isoformat()
+        utc_now = datetime.now(timezone.utc)
+        now = utc_now.isoformat()
         agent_entry = agents[args.id]
 
         file_path = os.path.join(agents_dir, agent_entry["file"])
@@ -748,7 +771,7 @@ def cmd_log(args):
         meta, body = parse_frontmatter(text)
         meta["updated"] = now
 
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        timestamp = utc_now.strftime("%Y-%m-%d %H:%M UTC")
         log_line = f"\n### {timestamp}\n{args.message}\n"
         body = body.rstrip("\n") + "\n" + log_line
 
@@ -949,9 +972,9 @@ def cmd_delete(args):
 
         # BFS to collect all IDs to delete
         to_delete = []
-        queue = [args.id]
+        queue = deque([args.id])
         while queue:
-            current = queue.pop(0)
+            current = queue.popleft()
             to_delete.append(current)
             if args.cascade:
                 current_children = agents.get(current, {}).get("children", [])
@@ -1275,9 +1298,6 @@ def build_parser():
 
     # validate
     p_validate = subparsers.add_parser("validate", help="Validate tree integrity")
-    p_validate.add_argument(
-        "--id", default=None, help="Validate specific agent (default: all)"
-    )
     p_validate.set_defaults(func=cmd_validate)
 
     # sync

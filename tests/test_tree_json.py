@@ -102,7 +102,7 @@ class TestTreeStore(unittest.TestCase):
             }
             with open(store.tree_path, "w") as f:
                 json.dump(tree_data, f)
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(SystemExit):
                 store.load()
 
 
