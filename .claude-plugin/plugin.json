@@ -9,6 +9,7 @@
   "homepage": "https://github.com/TanmayKallakuri/claude-agents-plugin",
   "repository": "https://github.com/TanmayKallakuri/claude-agents-plugin",
   "license": "MIT",
+  "keywords": ["agents", "orchestration", "task-management", "subagents", "workflow"],
   "agents": [
     "./agents/orchestrator.md"
   ],
